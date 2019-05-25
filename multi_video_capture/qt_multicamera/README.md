@@ -15,6 +15,11 @@ This has been tested with 2 WebCameras and 6 MP4 video files at the same time. S
 I used two other repositories to make this and modified to suit my need here. 
   1. Qt displaying multiple videos in different threads. See https://stackoverflow.com/questions/21246766/how-to-efficiently-display-opencv-video-in-qt and https://github.com/KubaO/stackoverflown/tree/master/questions/opencv-21246766
   2. A Java stype ini file with key value pairs.  See https://github.com/fredyw/cpp-properties
+  
+## Example
+The following image shows 6 running MP4 videos and two web cameras simultaneously as described. Each is in a separate widget, placed in a QGridLayout in a central widget of the QMainWindow. 
+![Screenshot_running_videos](https://user-images.githubusercontent.com/5513887/58373323-02e3f980-7f35-11e9-8d5e-978df4514471.png)
+
 
 
 
