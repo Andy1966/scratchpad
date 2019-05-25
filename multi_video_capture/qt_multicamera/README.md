@@ -20,7 +20,11 @@ I used two other repositories to make this and modified to suit my need here.
 The following image shows 6 running MP4 videos and two web cameras simultaneously as described. Each is in a separate widget, placed in a QGridLayout in a central widget of the QMainWindow. 
 ![Screenshot_running_videos](https://user-images.githubusercontent.com/5513887/58373323-02e3f980-7f35-11e9-8d5e-978df4514471.png)
 
+## Videos not supplied
 
+As I do not want to distribute video the videos directory is empty. Simply download any video and put the name into the videoProperties.ini file. I used the clipcanvas_14348.mp4 video in the snapshot above and then copied renaming as 1..5 so I had size videos to test with.
+
+I googled free video and found https://www.veedybox.com/blog/32-resources-for-free-stock-videos/ and found https://coverr.co/ where I downloaded free videos for testing.
 
 
 
