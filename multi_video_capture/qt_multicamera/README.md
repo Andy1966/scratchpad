@@ -10,7 +10,8 @@ This has been tested with 2 WebCameras and 6 MP4 video files at the same time. S
 
   *  Framerate of video files was unknown so I set to 30 fps
   *  USB camera bandwidth was a problem until I found an article saying put them on different ports/hubs and it will then work...which it did. See https://stackoverflow.com/questions/21246766/how-to-efficiently-display-opencv-video-in-qt
-
+  *  Should do some error checking and make sure all works properly. Just stitched together. 
+  
 ## References to other source code used
 I used two other repositories to make this and modified to suit my need here. 
   1. Qt displaying multiple videos in different threads. See https://stackoverflow.com/questions/21246766/how-to-efficiently-display-opencv-video-in-qt and https://github.com/KubaO/stackoverflown/tree/master/questions/opencv-21246766
@@ -26,5 +27,11 @@ As I do not want to distribute video the videos directory is empty. Simply downl
 
 I googled free video and found https://www.veedybox.com/blog/32-resources-for-free-stock-videos/ and found https://coverr.co/ where I downloaded free videos for testing.
 
-
+## Platforms
+### Linux
+I did development on Linux, Ubuntu. And it all just seemed to go fine so I have not noted anything down.
+### Windows 10
+I seemed to have problems as I did not understand the environment. I wanted to use Qt creator and hence had to compile OpenCV on the machine with Mingw. Here are two links I found very useful:
+  * https://wiki.qt.io/How_to_setup_Qt_and_openCV_on_Windows - Old but worked on OpenCV 4.1 on Windows 10.
+  * https://github.com/opencv/opencv/issues/14286 - Solved the compilation error because of dependency.
 
