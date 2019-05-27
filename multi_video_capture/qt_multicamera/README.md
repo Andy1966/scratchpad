@@ -34,4 +34,5 @@ I did development on Linux, Ubuntu. And it all just seemed to go fine so I have 
 I seemed to have problems as I did not understand the environment. I wanted to use Qt creator and hence had to compile OpenCV on the machine with Mingw. Here are two links I found very useful:
   * https://wiki.qt.io/How_to_setup_Qt_and_openCV_on_Windows - Old but worked on OpenCV 4.1 on Windows 10.
   * https://github.com/opencv/opencv/issues/14286 - Solved the compilation error because of dependency.
+  * https://forum.qt.io/topic/96460/opencv_highgui-seems-that-it-can-t-find-qt-libs/2 Cmake-GUI referenced wrong Qt
 
