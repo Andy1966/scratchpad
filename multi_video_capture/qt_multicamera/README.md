@@ -35,4 +35,5 @@ I seemed to have problems as I did not understand the environment. I wanted to u
   * https://wiki.qt.io/How_to_setup_Qt_and_openCV_on_Windows - Old but worked on OpenCV 4.1 on Windows 10.
   * https://github.com/opencv/opencv/issues/14286 - Solved the compilation error because of dependency.
   * https://forum.qt.io/topic/96460/opencv_highgui-seems-that-it-can-t-find-qt-libs/2 Cmake-GUI referenced wrong Qt
+  * Lastly I ran it and got no output in any windows in QtCreator. I found running command line it showed that Qt runtime libraries and then OpenCV libraries were not on the PATH environment variable when running. Strange no output so just added comments here in case anyone has same problem. 
 
