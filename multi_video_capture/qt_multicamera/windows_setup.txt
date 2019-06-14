@@ -1,0 +1,46 @@
+Windows setup
+=============
+
+Two laptops were tried and various successes and failures. So I decided to start from the beginning and work out what went wrong. This is a step by step approach that I used. This was done on Windows10.
+
+Install the following
+================= 
+https://git-scm.com/download/win - Git-GUI
+https://www.qt.io/ - Qt Creator, and Qt 5.12.3
+https://www.vim.org/download.php - gvim
+https://cmake.org/ - cmake
+https://visualstudio.microsoft.com -  Visual Studio
+https://www.anaconda.com/distribution/   - Python 3.7 (Numpy is required)
+
+C:\development, get the following source code
+==================================
+https://github.com/opencv/opencv_contrib
+https://github.com/Andy1966/scratchpad
+https://github.com/opencv/opencv
+
+Compiling OpenCV:
+=================
+Git checkout 4.1.0
+Make sure submodules have been initialised:git submodule update --init --recursive
+Add mingw to the environment variables. 
+    "C:\Qt\5.12.3\mingw73_64\bin"
+    C:\Qt\Tools\mingw730_64\bin
+    C:\development\opencv\build\bin
+run CMake-GUI
+  -use "mingw makefiles" and "specify native compilers" for "configure"
+               C:/Qt/Tools/mingw730_64/bin/x86_64-w64-mingw32-gcc.exe
+               C:/Qt/Tools/mingw730_64/bin/x86_64-w64-mingw32-g--.exe
+
+  -allow configuration to run, then "generate"
+Alter to add WITH_QT and WITH_OPENGL. Uncheck WITH_OPENCL_D3D11_NV. Then re-do the configure and generate
+mingw32-make -j 8
+mingw32-make install
+
+Compiling issues:
+===============
+I seemed to have problems as I did not understand the environment. I wanted to use Qt creator and hence had to compile OpenCV on the machine with Mingw. Here are two links I found very useful:
+  * https://wiki.qt.io/How_to_setup_Qt_and_openCV_on_Windows - Old but worked on OpenCV 4.1 on Windows 10.
+  * https://github.com/opencv/opencv/issues/14286 - Solved the compilation error because of dependency.
+  * https://forum.qt.io/topic/96460/opencv_highgui-seems-that-it-can-t-find-qt-libs/2 Cmake-GUI referenced wrong Qt
+  * Lastly I ran it and got no output in any windows in QtCreator. I found running command line it showed that Qt runtime libraries and then OpenCV libraries were not on the PATH environment variable when running. Strange no output so just added comments here in case anyone has same problem. 
+https://github.com/sunsided/opencv-cmake/

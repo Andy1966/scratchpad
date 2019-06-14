@@ -9,9 +9,25 @@ SOURCES = main.cpp \
     src-cpp-properties/Properties.cpp \
     src-cpp-properties/PropertiesParser.cpp \
     src-cpp-properties/PropertiesUtils.cpp
+
+linux {
 INCLUDEPATH += /usr/local/lib
 INCLUDEPATH += /usr/local/include/opencv4
 LIBS += -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio
+}
+
+windows{
+
+INCLUDEPATH += C:\development\opencv\build\include
+
+LIBS += -L C:/development/opencv/build/bin/ \
+        -lopencv_core410 \
+        -lopencv_imgproc410 \
+        -lopencv_highgui410 \
+        -lopencv_videoio410 \
+        -lopencv_imgcodecs410
+}
+
 macx {
   INCLUDEPATH += /opt/local/include
   LIBS += -L /opt/local/lib
