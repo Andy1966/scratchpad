@@ -92,17 +92,17 @@ private:
           m_measuredFps = "FPS[" + QString::number(m_fps) + "]";
           m_fps = 0;
       }
-
+      int h = m_frame.size().height;
       cv::putText(m_frame, //target image
                   m_cameraName.toStdString(), //text
-                  cv::Point(10, 30), //top-left position
+                  cv::Point(10, h-30), //top-left position
                   cv::FONT_HERSHEY_DUPLEX,
                   1.0,
                   CV_RGB(255, 255, 255), //font color
                   2);
       cv::putText(m_frame, //target image
                   m_measuredFps.toStdString(), //text
-                  cv::Point(10, 60), //top-left position
+                  cv::Point(10, h-70), //top-left position
                   cv::FONT_HERSHEY_DUPLEX,
                   1.0,
                   CV_RGB(255, 255, 255), //font color
@@ -171,15 +171,31 @@ class ImageViewer : public QWidget {
    QImage m_img;
    AddressTracker m_track;
    void paintEvent(QPaintEvent *) {
+
       QPainter p(this);
+
       if (!m_img.isNull()) {
+//         setMinimumSize(m_img.width(), m_img.height());
          setAttribute(Qt::WA_OpaquePaintEvent);
-         p.drawImage(0, 0, m_img);
+         QRectF targetSize(0,0,width(), height());
+         QRect sourceSize(0,0,m_img.width(), m_img.height());
+         p.drawImage(targetSize, m_img, sourceSize);
          painted = true;
+         return;
       }
+
+      // As standard draw a border as no image present.
+      QPen pen(QColor(255,0,0,255));
+      p.setPen(pen);
+      p.drawRect(0,0,width()-1, height()-1);
+      p.drawLine((QLine(0,0,width() -1, height()-1)));
+      p.drawLine((QLine(width() -1,0,0, height()-1)));
+
    }
 public:
-   ImageViewer(QWidget * parent = nullptr) : QWidget(parent) {}
+   ImageViewer(QWidget * parent = nullptr) : QWidget(parent) {
+       setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
+    }
    ~ImageViewer() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
    Q_SLOT void setImage(const QImage &img) {
       if (!painted) qDebug() << "Viewer dropped frame!";
@@ -189,7 +205,7 @@ public:
       else
          m_img = img.copy();
       painted = false;
-      if (m_img.size() != size()) setFixedSize(m_img.size());
+//      if (m_img.size() != size()) setFixedSize(m_img.size());
       m_track.track(m_img);
       update();
    }
@@ -200,13 +216,16 @@ class Thread final : public QThread { public: ~Thread() { quit(); wait(); } };
 
 class VideoStreamInstance {
 public:
+    VideoStreamInstance(QWidget * parent = nullptr):view(parent){}
+
     ImageViewer view;
     Capture capture;
     Converter converter;
     Thread captureThread, converterThread;
 };
 
-#define CAMERAS_PROPERTY_KEY "cameras"
+#define PROPKEY_CAMERAS_PROPERTY "cameras"
+#define PROPKEY_FULLSCREEN "full_screen"
 
 int main(int argc, char *argv[])
 {
@@ -223,7 +242,7 @@ int main(int argc, char *argv[])
    cppproperties::PropertiesParser propParser = cppproperties::PropertiesParser();
    cppproperties::Properties p = propParser.Read("../qt_multicamera/videoProperties.ini");
 
-   QString cameraList = QString::fromStdString(p.GetProperty(CAMERAS_PROPERTY_KEY));
+   QString cameraList = QString::fromStdString(p.GetProperty(PROPKEY_CAMERAS_PROPERTY));
    QStringList camera_list = cameraList.split((","));
 
 
@@ -233,10 +252,14 @@ int main(int argc, char *argv[])
    int gridSizeY = numStreams / (int) root;
    int gridSizeX = numStreams / (int) gridSizeY;
    gridSizeX += (int) numStreams % (gridSizeX * gridSizeY);
+//   qDebug() << "--------------------------------";
+//   qDebug() << "gridX = " << gridSizeX << ", gridY = " << gridSizeY << ".";
+//   qDebug() << "--------------------------------";
 
   // For now one window and display all video stream widgets within it
   QMainWindow viewingWindow;
   viewingWindow.setWindowTitle("Multiple Video Streaming Viewer");
+  viewingWindow.setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
 
   // Make sure we can put the video streams in a grid
   QGridLayout * viewingGrid = new QGridLayout();
@@ -244,6 +267,7 @@ int main(int argc, char *argv[])
   QWidget* widget = new QWidget(&viewingWindow);
   widget->setLayout(viewingGrid);
   viewingWindow.setCentralWidget(widget);
+  viewingWindow.setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
 
   viewingWindow.setVisible(true);
   viewingWindow.show();
@@ -255,7 +279,7 @@ int main(int argc, char *argv[])
    {
        camera = camera.trimmed();
 
-       VideoStreamInstance * vStream = new VideoStreamInstance;
+       VideoStreamInstance * vStream = new VideoStreamInstance(widget);
 
        // Everything runs at the same priority as the gui, so it won't supply useless frames.
        vStream->converter.setProcessAll(false);
@@ -266,8 +290,6 @@ int main(int argc, char *argv[])
        QObject::connect(&vStream->capture, &Capture::frameReady, &vStream->converter, &Converter::processFrame);
        QObject::connect(&vStream->converter, &Converter::imageReady, &vStream->view, &ImageViewer::setImage);
        QObject::connect(&vStream->capture, &Capture::started, [](){ qDebug() << "Capture started."; });
-//       vStream->view.setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-//       vStream->view.show();
 
        // Select the right argument for the capture stream.
        QString argCamUrl = QString::fromStdString(p.GetProperty(camera.toStdString())).trimmed();
@@ -287,11 +309,16 @@ int main(int argc, char *argv[])
        if (col == gridSizeX) {col = 0; row+=1;}
    }
 
-   // Optimise for full screen
-   QRect rec = QApplication::desktop()->screenGeometry(&viewingWindow);
-   int height = rec.height();
-   int width = rec.width();
-//   viewingWindow.resize(width, height);
+   // Check if full screen has been requested when we start running.
+   QString fullScreen = QString::fromStdString(p.GetProperty(PROPKEY_FULLSCREEN, ""));
+   if (!fullScreen.isEmpty())
+   {
+       // Optimise for full screen
+       QRect rec = QApplication::desktop()->screenGeometry(&viewingWindow);
+       int height = rec.height();
+       int width = rec.width();
+       viewingWindow.resize(width, height);
+   }
 
    return app.exec();
 }
