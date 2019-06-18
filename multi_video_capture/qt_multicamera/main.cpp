@@ -10,6 +10,9 @@
 #include <QtMath>
 #include <QGridLayout>
 #include <QWidget>
+#include <QString>
+#include <QChar>
+#include <time.h>
 
 #define MS_ONE_SECOND  1000
 #define VIDEO_FILE_FRAMES_PER_SECOND 30
@@ -41,8 +44,10 @@ public:
    Capture(QObject *parent = {}) : QObject(parent) {}
    ~Capture() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
    Q_SIGNAL void started();
-   Q_SLOT void start(int cam = {}) {
-       qDebug() << "Camera " << cam << ".";
+   Q_SLOT void start(int cam = {}, QString camName = "NoName") {
+//       qDebug() << "Camera " << cam << ".";
+       m_captureName = cam;
+       m_cameraName = camName;
       if (!m_videoCapture)
          m_videoCapture.reset(new cv::VideoCapture(cam, cv::CAP_V4L2));
       if (m_videoCapture->isOpened()) {
@@ -52,19 +57,23 @@ public:
       } else {
         qDebug() << "Failed to start playing camera[" << cam << "].";
     }
+      m_startPeriod = clock();
    }
-   Q_SLOT void start(QString cam) {
-       qDebug() << "video file " << cam << ".";
+   Q_SLOT void start(QString camUrl, QString camName) {
+       qDebug() << "video file " << camUrl << ".";
+       m_captureName = camUrl;
+       m_cameraName = camName;
        m_msFrameInterval = MS_ONE_SECOND / VIDEO_FILE_FRAMES_PER_SECOND;
       if (!m_videoCapture)
-         m_videoCapture.reset(new cv::VideoCapture(cam.toStdString()));
+         m_videoCapture.reset(new cv::VideoCapture(camUrl.toStdString()));
       if (m_videoCapture->isOpened()) {
          m_timer.start(m_msFrameInterval, this);
-         qDebug() << "Started playing video file " << cam << ".";
+         qDebug() << "Started playing video file " << camUrl << ".";
          emit started();
       } else {
-        qDebug() << "Failed to start playing video file " << cam << ".";
+        qDebug() << "Failed to start playing video file " << camUrl << ".";
     }
+      m_startPeriod = clock();
    }
    Q_SLOT void stop() { m_timer.stop(); }
    Q_SIGNAL void frameReady(const cv::Mat &);
@@ -76,9 +85,40 @@ private:
          m_timer.stop();
          return;
       }
+      m_fps++;
+      m_endPeriod = clock();
+      if (m_endPeriod - m_startPeriod > 1000) {
+          m_startPeriod = m_endPeriod;
+          m_measuredFps = "FPS[" + QString::number(m_fps) + "]";
+          m_fps = 0;
+      }
+
+      cv::putText(m_frame, //target image
+                  m_cameraName.toStdString(), //text
+                  cv::Point(10, 30), //top-left position
+                  cv::FONT_HERSHEY_DUPLEX,
+                  1.0,
+                  CV_RGB(255, 255, 255), //font color
+                  2);
+      cv::putText(m_frame, //target image
+                  m_measuredFps.toStdString(), //text
+                  cv::Point(10, 60), //top-left position
+                  cv::FONT_HERSHEY_DUPLEX,
+                  1.0,
+                  CV_RGB(255, 255, 255), //font color
+                  2);
       m_track.track(m_frame);
       emit frameReady(m_frame);
    }
+   // URL and name of the camera
+   QString m_captureName = "no name";
+   QString m_cameraName = "no name";
+
+   // FPS counting
+   clock_t m_startPeriod = 0;
+   clock_t m_endPeriod = 0;
+   uint64_t m_fps = 0;
+   QString m_measuredFps = "FPS[-]";
 };
 
 class Converter : public QObject {
@@ -170,6 +210,12 @@ public:
 
 int main(int argc, char *argv[])
 {
+    qDebug() << "------------------------------------------";
+    qDebug().noquote() << "Qt Version:: " << qVersion();
+    qDebug() << "------------------------------------------";
+    qDebug().noquote() << QString::fromStdString(cv::getBuildInformation());
+    qDebug() << "------------------------------------------";
+
     qRegisterMetaType<cv::Mat>();
    QApplication app(argc, argv);
 
@@ -224,19 +270,19 @@ int main(int argc, char *argv[])
 //       vStream->view.show();
 
        // Select the right argument for the capture stream.
-       QString arg = QString::fromStdString(p.GetProperty(camera.toStdString())).trimmed();
+       QString argCamUrl = QString::fromStdString(p.GetProperty(camera.toStdString())).trimmed();
        bool isInt;
-       int intArg = arg.toInt(&isInt);
+       int intCamUrlArg = argCamUrl.toInt(&isInt);
 
        // And start capturing
-       if (isInt) QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(int, intArg));
-       else QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(QString, arg));
+       if (isInt) QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(int, intCamUrlArg),Q_ARG(QString, camera));
+       else QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(QString, argCamUrl),Q_ARG(QString, camera));
 
        // Keep a list of each video stream
        streamList.append(vStream);
 
        // Make sure we add the video to the main window widget
-       viewingGrid->addWidget(&vStream->view, row, col);
+       viewingGrid->addWidget(&vStream->view, row, col, nullptr);
        col += 1;
        if (col == gridSizeX) {col = 0; row+=1;}
    }
