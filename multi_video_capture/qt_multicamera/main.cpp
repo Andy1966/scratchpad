@@ -85,6 +85,7 @@ private:
          m_timer.stop();
          return;
       }
+//      qDebug() << "Captured Image [cols,rows] = [" << m_frame.cols << ", " << m_frame.rows << "]";
       m_fps++;
       m_endPeriod = clock();
       if (m_endPeriod - m_startPeriod > 1000) {
@@ -137,9 +138,13 @@ class Converter : public QObject {
    }
    void process(const cv::Mat &frame) {
       Q_ASSERT(frame.type() == CV_8UC3);
-      int w = frame.cols / 3.0, h = frame.rows / 3.0;
+//       int w = frame.cols / 3.0, h = frame.rows / 3.0; // This was found to be wrong for Colour supplied camera. Needs checking out further
+      int w = frame.cols , h = frame.rows ;
       if (m_image.size() != QSize{w,h})
+      {
          m_image = QImage(w, h, QImage::Format_RGB888);
+//        qDebug() << "Converter frame Size [" << w << ", " << h << "] and Image Size ["<< m_image.size() << "]";
+      }
       cv::Mat mat(h, w, CV_8UC3, m_image.bits(), m_image.bytesPerLine());
       cv::resize(frame, mat, mat.size(), 0, 0, cv::INTER_AREA);
       cv::cvtColor(mat, mat, cv::COLOR_BGR2RGB);
@@ -179,7 +184,7 @@ class ImageViewer : public QWidget {
          setAttribute(Qt::WA_OpaquePaintEvent);
          QRectF targetSize(0,0,width(), height());
          QRect sourceSize(0,0,m_img.width(), m_img.height());
-         p.drawImage(targetSize, m_img, sourceSize);
+         p.drawImage(targetSize, m_img, sourceSize, Qt::DiffuseDither);
          painted = true;
          return;
       }
