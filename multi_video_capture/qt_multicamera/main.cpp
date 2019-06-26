@@ -38,49 +38,63 @@ class Capture : public QObject {
    cv::Mat m_frame;
    QBasicTimer m_timer;
    QScopedPointer<cv::VideoCapture> m_videoCapture;
+   int m_cap_api_preference = cv::CAP_ANY;
    AddressTracker m_track;
    int m_msFrameInterval = 0; // Blocking calls to camera mean this is irrelevant. however, for videos this can be too fast and need interval
+   bool m_delayed_start = false;
 public:
    Capture(QObject *parent = {}) : QObject(parent) {}
    ~Capture() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
    Q_SIGNAL void started();
    Q_SLOT void start(int cam = {}, QString camName = "NoName") {
 //       qDebug() << "Camera " << cam << ".";
-       m_captureName = cam;
+       m_captureName = QString::number(cam);
        m_cameraName = camName;
-      if (!m_videoCapture)
-         m_videoCapture.reset(new cv::VideoCapture(cam, cv::CAP_V4L2));
-      if (m_videoCapture->isOpened()) {
-         m_timer.start(m_msFrameInterval, this);
-         qDebug() << "Started playing camera[" << cam << "].";
-         emit started();
-      } else {
-        qDebug() << "Failed to start playing camera[" << cam << "].";
-    }
-      m_startPeriod = clock();
+       m_cap_api_preference = cv::CAP_V4L2;
+       m_msFrameInterval = 0;
+       m_timer.start(m_msFrameInterval, this);
    }
    Q_SLOT void start(QString camUrl, QString camName) {
        qDebug() << "video file " << camUrl << ".";
        m_captureName = camUrl;
        m_cameraName = camName;
+       m_cap_api_preference = cv::CAP_ANY;
        m_msFrameInterval = MS_ONE_SECOND / VIDEO_FILE_FRAMES_PER_SECOND;
-      if (!m_videoCapture)
-         m_videoCapture.reset(new cv::VideoCapture(camUrl.toStdString()));
-      if (m_videoCapture->isOpened()) {
-         m_timer.start(m_msFrameInterval, this);
-         qDebug() << "Started playing video file " << camUrl << ".";
-         emit started();
-      } else {
-        qDebug() << "Failed to start playing video file " << camUrl << ".";
-    }
-      m_startPeriod = clock();
+       m_timer.start(m_msFrameInterval, this);
+   }
+   bool postponed_camera_start() {
+       bool isWebcam = false;
+       bool ok = false;
+       int camnum = m_captureName.toInt(&isWebcam);
+       if (!m_videoCapture)
+       {
+           if (isWebcam)
+               m_videoCapture.reset(new cv::VideoCapture(camnum, cv::CAP_V4L2));
+           else
+               m_videoCapture.reset(new cv::VideoCapture(m_captureName.toStdString(), m_cap_api_preference));
+        }
+       if (m_videoCapture->isOpened()) {
+          qDebug() << "Started playing video file " << m_captureName << ".";
+          emit started();
+          ok = true;
+       } else {
+         m_timer.stop();
+         ok = false;
+         qDebug() << "Failed to start playing video file " << m_captureName << ".";
+     }
+     m_startPeriod = clock();
+     return ok;
    }
    Q_SLOT void stop() { m_timer.stop(); }
    Q_SIGNAL void frameReady(const cv::Mat &);
    cv::Mat frame() const { return m_frame; }
 private:
    void timerEvent(QTimerEvent * ev) {
-      if (ev->timerId() != m_timer.timerId()) return;
+      if (ev->timerId() == m_timer.timerId()) handle_capture();
+   }
+
+   void handle_capture() {
+      if (!m_delayed_start) m_delayed_start = postponed_camera_start();
       if (!m_videoCapture->read(m_frame)) { // Blocks until a new frame is ready
          m_timer.stop();
          return;
