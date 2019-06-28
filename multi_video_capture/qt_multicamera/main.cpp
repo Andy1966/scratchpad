@@ -36,23 +36,25 @@ class Capture : public QObject {
    Q_OBJECT
    Q_PROPERTY(cv::Mat frame READ frame NOTIFY frameReady USER true)
    cv::Mat m_frame;
-   QBasicTimer m_timer;
+   QBasicTimer m_captureTimer;
    QScopedPointer<cv::VideoCapture> m_videoCapture;
    int m_cap_api_preference = cv::CAP_ANY;
    AddressTracker m_track;
    int m_msFrameInterval = 0; // Blocking calls to camera mean this is irrelevant. however, for videos this can be too fast and need interval
    bool m_delayed_start = false;
 public:
-   Capture(QObject *parent = {}) : QObject(parent) {}
+   Capture(QObject *parent = {}) : QObject(parent) { }
    ~Capture() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
    Q_SIGNAL void started();
+   Q_SIGNAL void cameraNamed(QString);
    Q_SLOT void start(int cam = {}, QString camName = "NoName") {
 //       qDebug() << "Camera " << cam << ".";
        m_captureName = QString::number(cam);
        m_cameraName = camName;
        m_cap_api_preference = cv::CAP_V4L2;
        m_msFrameInterval = 0;
-       m_timer.start(m_msFrameInterval, this);
+       m_captureTimer.start(m_msFrameInterval, this);
+       emit cameraNamed(m_cameraName);
    }
    Q_SLOT void start(QString camUrl, QString camName) {
        qDebug() << "video file " << camUrl << ".";
@@ -60,7 +62,8 @@ public:
        m_cameraName = camName;
        m_cap_api_preference = cv::CAP_ANY;
        m_msFrameInterval = MS_ONE_SECOND / VIDEO_FILE_FRAMES_PER_SECOND;
-       m_timer.start(m_msFrameInterval, this);
+       m_captureTimer.start(m_msFrameInterval, this);
+       emit cameraNamed(m_cameraName);
    }
    bool postponed_camera_start() {
        bool isWebcam = false;
@@ -78,69 +81,40 @@ public:
           emit started();
           ok = true;
        } else {
-         m_timer.stop();
+         m_captureTimer.stop();
          ok = false;
          qDebug() << "Failed to start playing video file " << m_captureName << ".";
      }
-     m_startPeriod = clock();
      return ok;
    }
-   Q_SLOT void stop() { m_timer.stop(); }
+   Q_SLOT void stop() { m_captureTimer.stop(); }
    Q_SIGNAL void frameReady(const cv::Mat &);
    cv::Mat frame() const { return m_frame; }
 private:
    void timerEvent(QTimerEvent * ev) {
-      if (ev->timerId() == m_timer.timerId()) handle_capture();
+      if (ev->timerId() == m_captureTimer.timerId()) handle_capture();
    }
 
    void handle_capture() {
       if (!m_delayed_start) m_delayed_start = postponed_camera_start();
       if (!m_videoCapture->read(m_frame)) { // Blocks until a new frame is ready
-         m_timer.stop();
+         m_captureTimer.stop();
          return;
       }
 //      qDebug() << "Captured Image [cols,rows] = [" << m_frame.cols << ", " << m_frame.rows << "]";
-      m_fps++;
-      m_endPeriod = clock();
-      if (m_endPeriod - m_startPeriod > 1000) {
-          m_startPeriod = m_endPeriod;
-          m_measuredFps = "FPS[" + QString::number(m_fps) + "]";
-          m_fps = 0;
-      }
-      int h = m_frame.size().height;
-      cv::putText(m_frame, //target image
-                  m_cameraName.toStdString(), //text
-                  cv::Point(10, h-30), //top-left position
-                  cv::FONT_HERSHEY_DUPLEX,
-                  1.0,
-                  CV_RGB(255, 255, 255), //font color
-                  2);
-      cv::putText(m_frame, //target image
-                  m_measuredFps.toStdString(), //text
-                  cv::Point(10, h-70), //top-left position
-                  cv::FONT_HERSHEY_DUPLEX,
-                  1.0,
-                  CV_RGB(255, 255, 255), //font color
-                  2);
       m_track.track(m_frame);
       emit frameReady(m_frame);
    }
    // URL and name of the camera
    QString m_captureName = "no name";
    QString m_cameraName = "no name";
-
-   // FPS counting
-   clock_t m_startPeriod = 0;
-   clock_t m_endPeriod = 0;
-   uint64_t m_fps = 0;
-   QString m_measuredFps = "FPS[-]";
 };
 
 class Converter : public QObject {
    Q_OBJECT
    Q_PROPERTY(QImage image READ image NOTIFY imageReady USER true)
    Q_PROPERTY(bool processAll READ processAll WRITE setProcessAll)
-   QBasicTimer m_timer;
+   QBasicTimer m_converterTimer;
    cv::Mat m_frame;
    QImage m_image;
    bool m_processAll = false;
@@ -148,7 +122,7 @@ class Converter : public QObject {
    void queue(const cv::Mat &frame) {
       if (!m_frame.empty()) qDebug() << "Converter dropped frame!";
       m_frame = frame;
-      if (! m_timer.isActive()) m_timer.start(0, this);
+      if (! m_converterTimer.isActive()) m_converterTimer.start(0, this);
    }
    void process(const cv::Mat &frame) {
       Q_ASSERT(frame.type() == CV_8UC3);
@@ -165,11 +139,11 @@ class Converter : public QObject {
       emit imageReady(m_image);
    }
    void timerEvent(QTimerEvent *ev) {
-      if (ev->timerId() != m_timer.timerId()) return;
+      if (ev->timerId() != m_converterTimer.timerId()) return;
       process(m_frame);
       m_frame.release();
       m_track.track(m_frame);
-      m_timer.stop();
+      m_converterTimer.stop();
    }
 public:
    explicit Converter(QObject * parent = nullptr) : QObject(parent) {}
@@ -189,9 +163,11 @@ class ImageViewer : public QWidget {
    bool painted = true;
    QImage m_img;
    AddressTracker m_track;
+   QBasicTimer m_fpsTimer;
+   QString m_cameraName = "Unknown";
    void paintEvent(QPaintEvent *) {
 
-      QPainter p(this);
+       QPainter p(this);
 
       if (!m_img.isNull()) {
 //         setMinimumSize(m_img.width(), m_img.height());
@@ -200,23 +176,38 @@ class ImageViewer : public QWidget {
          QRect sourceSize(0,0,m_img.width(), m_img.height());
          p.drawImage(targetSize, m_img, sourceSize, Qt::DiffuseDither);
          painted = true;
-         return;
+      }
+      else {
+          // As standard draw a border as no image present.
+          QPen pen(QColor(255,0,0,255));
+          p.setPen(pen);
+          p.drawRect(0,0,width()-1, height()-1);
+          p.drawLine((QLine(0,0,width() -1, height()-1)));
+          p.drawLine((QLine(width() -1,0,0, height()-1)));
       }
 
-      // As standard draw a border as no image present.
-      QPen pen(QColor(255,0,0,255));
-      p.setPen(pen);
-      p.drawRect(0,0,width()-1, height()-1);
-      p.drawLine((QLine(0,0,width() -1, height()-1)));
-      p.drawLine((QLine(width() -1,0,0, height()-1)));
-
+      QString fontType = "times";
+      p.setFont(QFont(fontType,12));
+      QFontMetrics fm(fontType);
+      int pixelsHigh = fm.height() + 1;
+      QPen tpen(QColor(255,255,255,255));
+      p.setPen(tpen);
+      p.drawText(10, height()-pixelsHigh * 2, m_cameraName);
+      p.drawText(10, height()-pixelsHigh * 1, m_measuredFps);
    }
 public:
    ImageViewer(QWidget * parent = nullptr) : QWidget(parent) {
        setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
+       m_fpsTimer.start(MS_ONE_SECOND, this);
     }
    ~ImageViewer() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
+
+   Q_SLOT void setCameraName(const QString camName) {
+       m_cameraName = camName;
+   }
+
    Q_SLOT void setImage(const QImage &img) {
+      m_fps++;
       if (!painted) qDebug() << "Viewer dropped frame!";
       if (m_img.size() == img.size() && m_img.format() == img.format()
           && m_img.bytesPerLine() == img.bytesPerLine())
@@ -229,6 +220,30 @@ public:
       update();
    }
    QImage image() const { return m_img; }
+
+private:
+   void timerEvent(QTimerEvent * ev) {
+      if (ev->timerId() == m_fpsTimer.timerId()) handleFPSInterval();
+   }
+
+   void handleFPSInterval() {
+       static bool forceUpdate = false;
+
+       qDebug() << m_measuredFps << "- handleFPSInterval["<< m_cameraName << "], m_fps == " << m_fps;
+
+       // If we have not been sent image display is frozen, so cause a refresh
+       if (m_fps == 0) forceUpdate = true;
+       else forceUpdate = false;
+
+       m_measuredFps = "FPS[" + QString::number(m_fps) + "]";
+       m_fps = 0;
+
+       if (forceUpdate) update();
+   }
+
+   // FPS counting
+   uint64_t m_fps = 0;
+   QString m_measuredFps = "FPS[-]";
 };
 
 class Thread final : public QThread { public: ~Thread() { quit(); wait(); } };
@@ -307,6 +322,7 @@ int main(int argc, char *argv[])
        vStream->capture.moveToThread(&vStream->captureThread);
        vStream->converter.moveToThread(&vStream->converterThread);
        QObject::connect(&vStream->capture, &Capture::frameReady, &vStream->converter, &Converter::processFrame);
+       QObject::connect(&vStream->capture, &Capture::cameraNamed, &vStream->view, &ImageViewer::setCameraName);
        QObject::connect(&vStream->converter, &Converter::imageReady, &vStream->view, &ImageViewer::setImage);
        QObject::connect(&vStream->capture, &Capture::started, [](){ qDebug() << "Capture started."; });
 
