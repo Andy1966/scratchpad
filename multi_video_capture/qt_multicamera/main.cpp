@@ -13,9 +13,20 @@
 #include <QString>
 #include <QChar>
 #include <time.h>
+#include <QDateTime>
+#include <QtConcurrent/QtConcurrent>
+#include <QFile>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QSize>
 
 #define MS_ONE_SECOND  1000
 #define VIDEO_FILE_FRAMES_PER_SECOND 30
+#define CAPTURED_IMAGES_DIRECTORY_PATH "captured/images"
+#define JPEG_FILE_EXTENSION "JPEG"
+#define MJPG_FILE_EXTENSION "MP4"
+#define CAPTURED_VIDEO_DIRECTORY_PATH "captured/videos"
 
 Q_DECLARE_METATYPE(cv::Mat)
 
@@ -38,28 +49,32 @@ class Capture : public QObject {
    cv::Mat m_frame;
    QBasicTimer m_captureTimer;
    QScopedPointer<cv::VideoCapture> m_videoCapture;
+   QScopedPointer<cv::VideoWriter> m_videoWriter;
    int m_cap_api_preference = cv::CAP_ANY;
    AddressTracker m_track;
    int m_msFrameInterval = 0; // Blocking calls to camera mean this is irrelevant. however, for videos this can be too fast and need interval
    bool m_delayed_start = false;
+   bool m_pausedRecording = false;
 public:
    Capture(QObject *parent = {}) : QObject(parent) { }
    ~Capture() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
    Q_SIGNAL void started();
    Q_SIGNAL void cameraNamed(QString);
-   Q_SLOT void start(int cam = {}, QString camName = "NoName") {
+   Q_SLOT void start(int cam = {}, QString camName = "NoName", bool recordVideo = false) {
 //       qDebug() << "Camera " << cam << ".";
        m_captureName = QString::number(cam);
        m_cameraName = camName;
+       m_recordVideo = recordVideo;
        m_cap_api_preference = cv::CAP_V4L2;
        m_msFrameInterval = 0;
        m_captureTimer.start(m_msFrameInterval, this);
        emit cameraNamed(m_cameraName);
    }
-   Q_SLOT void start(QString camUrl, QString camName) {
+   Q_SLOT void start(QString camUrl, QString camName, bool recordVideo = false) {
        qDebug() << "video file " << camUrl << ".";
        m_captureName = camUrl;
        m_cameraName = camName;
+       m_recordVideo = recordVideo;
        m_cap_api_preference = cv::CAP_ANY;
        m_msFrameInterval = MS_ONE_SECOND / VIDEO_FILE_FRAMES_PER_SECOND;
        m_captureTimer.start(m_msFrameInterval, this);
@@ -87,27 +102,102 @@ public:
      }
      return ok;
    }
-   Q_SLOT void stop() { m_captureTimer.stop(); }
+   Q_SLOT void stop() { stopRecording(); m_captureTimer.stop(); }
+
+   Q_SLOT void snapshot() {
+       QtConcurrent::run([this]() {
+            // Code in this block will run in another thread. We detach the storing image
+            // so as not to block ongoing video if its slow to store in the filesystem.
+
+            QString path(CAPTURED_IMAGES_DIRECTORY_PATH);
+            QFile file;
+            openFileForCapture(file, path, fileNameSuggestion() + "." + JPEG_FILE_EXTENSION);
+            if (!file.isOpen()) {
+                qDebug() << "Filed to capture " << file.fileName();
+                return;
+            }
+
+            Q_ASSERT(this->m_frame.type() == CV_8UC3);
+
+            this->frameMutex.lock();
+            cv::Mat capturedFrame = this->m_frame.clone();
+            this->frameMutex.unlock();
+
+            int w = capturedFrame.cols , h = capturedFrame.rows ;
+            QImage image = QImage(w, h, QImage::Format_RGB888);
+            cv::Mat mat(h, w, CV_8UC3, image.bits(), image.bytesPerLine());
+            cv::resize(capturedFrame, mat, mat.size(), 0, 0, cv::INTER_AREA);
+            cv::cvtColor(mat, mat, cv::COLOR_BGR2RGB);
+            image.save(&file,JPEG_FILE_EXTENSION);
+       });
+   }
+
+   Q_SLOT void startRecording() {
+       QString path(CAPTURED_VIDEO_DIRECTORY_PATH);
+       QFile file;
+       openFileForCapture(file, path, fileNameSuggestion() + "." + MJPG_FILE_EXTENSION);
+       if (!file.isOpen()) {
+           qDebug() << "Filed to capture " << file.fileName();
+           emit recordingStopped();
+           return;
+       }
+       file.close();
+       m_videoWriter.reset(new cv::VideoWriter(file.fileName().toStdString(),cv::VideoWriter::fourcc('M','J','P','G'),10, cv::Size(m_frame.cols,m_frame.rows)));
+       emit recordingStarted();
+   }
+
+   Q_SLOT void stopRecording() {m_videoWriter->release(); m_videoWriter.reset(); emit recordingStopped();}
+
+   Q_SLOT void pauseRecording() {m_pausedRecording = true;}
+   Q_SLOT void continueRecording() {m_pausedRecording = false;}
+   Q_SIGNAL void recordingStopped();
+   Q_SIGNAL void recordingStarted();
+
    Q_SIGNAL void frameReady(const cv::Mat &);
    cv::Mat frame() const { return m_frame; }
 private:
+   void openFileForCapture(QFile & file, const QString & path, const QString & filename)
+   {
+       QDir dir; // Initialize to the desired dir if 'path' is relative
+                 // By default the program's working directory "." is used.
+
+       // We create the directory if needed
+       if (!dir.exists(path))
+           dir.mkpath(path); // You can check the success if needed
+
+       file.setFileName(path + "/" + filename);
+       file.open(QIODevice::WriteOnly); // Or QIODevice::ReadWrite
+   }
+
+   QString fileNameSuggestion() {
+       return QDateTime::currentDateTime().toString("ddMMyyyy_HHmmss");
+   }
    void timerEvent(QTimerEvent * ev) {
       if (ev->timerId() == m_captureTimer.timerId()) handle_capture();
    }
 
    void handle_capture() {
       if (!m_delayed_start) m_delayed_start = postponed_camera_start();
+      frameMutex.lock();
       if (!m_videoCapture->read(m_frame)) { // Blocks until a new frame is ready
          m_captureTimer.stop();
          return;
       }
+      frameMutex.unlock();
+
 //      qDebug() << "Captured Image [cols,rows] = [" << m_frame.cols << ", " << m_frame.rows << "]";
       m_track.track(m_frame);
+
+      // If we are recording video then do it...
+      if (!m_pausedRecording && !m_videoWriter.isNull() && m_videoWriter->isOpened()) m_videoWriter->write(m_frame);
+
       emit frameReady(m_frame);
    }
+   QMutex frameMutex; // To gaurd m_frame
    // URL and name of the camera
    QString m_captureName = "no name";
    QString m_cameraName = "no name";
+   bool m_recordVideo = false;
 };
 
 class Converter : public QObject {
@@ -165,6 +255,7 @@ class ImageViewer : public QWidget {
    AddressTracker m_track;
    QBasicTimer m_fpsTimer;
    QString m_cameraName = "Unknown";
+   QWidget * m_toolbar = nullptr;
    void paintEvent(QPaintEvent *) {
 
        QPainter p(this);
@@ -199,8 +290,13 @@ public:
    ImageViewer(QWidget * parent = nullptr) : QWidget(parent) {
        setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
        m_fpsTimer.start(MS_ONE_SECOND, this);
+
+       showToolbar();
+       setMinimumSize(m_toolbar->size() * 2);
     }
+
    ~ImageViewer() { qDebug() << __FUNCTION__ << "reallocations" << m_track.reallocs; }
+
 
    Q_SLOT void setCameraName(const QString camName) {
        m_cameraName = camName;
@@ -221,7 +317,87 @@ public:
    }
    QImage image() const { return m_img; }
 
+   Q_SIGNAL void startRecording();
+   Q_SIGNAL void continueRecording();
+   Q_SIGNAL void pauseRecording();
+   Q_SIGNAL void takeSnapshotImage();
+   Q_SIGNAL void stopRecording();
+
+   Q_SIGNAL void buttonRecordingStarted();
+   Q_SIGNAL void buttonRecordingStopped();
+
+   Q_SLOT void recordingStarted() {
+        emit buttonRecordingStarted();
+   }
+   Q_SLOT void recordingStopped() {
+        emit buttonRecordingStopped();
+   }
+
 private:
+   // Button pressed slots we relay and use internally here...
+   Q_SLOT void recordPressed() { emit startRecording();}
+   Q_SLOT void playPressed() { emit continueRecording();}
+   Q_SLOT void pausePressed() { emit pauseRecording();}
+   Q_SLOT void snapshotPressed() { emit takeSnapshotImage();}
+   Q_SLOT void stopPressed() { emit stopRecording();}
+
+
+   void resizeEvent(QResizeEvent *event)
+   {
+       QSize toolbarSize = m_toolbar->size();
+       QSize windowSize = event->size();
+       m_toolbar->move(windowSize.width() - toolbarSize.width(), windowSize.height() - toolbarSize.height());
+   }
+
+   void showToolbar()
+   {
+      m_toolbar = new QWidget(this);
+      QPushButton * record = new QPushButton(QIcon(":/toolbar/icons/record.png"),"");
+      record->setToolTip("Record video");
+
+      QPushButton * snapshot = new QPushButton(QIcon(":/toolbar/icons/snapshot.png"),"");
+      snapshot->setToolTip("Store the current video frame as a single image");
+
+      QPushButton * pause = new QPushButton(QIcon(":/toolbar/icons/pause.png"),"");
+      pause->setToolTip("Pause video");
+
+      QPushButton * play = new QPushButton(QIcon(":/toolbar/icons/play.png"),"");
+      play->setToolTip("Play video");
+
+      QPushButton * stop = new QPushButton(QIcon(":/toolbar/icons/stop.png"),"");
+      stop->setToolTip("Stop recording video");
+
+      // Signals to be emitted to get the video capture component to control recording
+      connect(record, SIGNAL(pressed()), SLOT(recordPressed()));
+      connect(snapshot, SIGNAL(pressed()), SLOT(snapshotPressed()));
+      connect(pause, SIGNAL(pressed()), SLOT(pausePressed()));
+      connect(play, SIGNAL(pressed()), SLOT(playPressed()));
+      connect(stop, SIGNAL(pressed()), SLOT(stopPressed()));
+
+      // Initial state of the icon buttons
+      // Not all icon buttons implemented yet so may stay hidden and not connected.
+      record->show();
+      pause->hide();
+      stop->hide();
+      play->hide();
+      snapshot->show();
+
+      // Signals to control state visibility of the toolbar in response to Capture class recording states
+      QObject::connect(this, SIGNAL(buttonRecordingStarted()), record, SLOT(hide()));
+      QObject::connect(this, SIGNAL(buttonRecordingStarted()), stop, SLOT(show()));
+      QObject::connect(this, SIGNAL(buttonRecordingStopped()), record, SLOT(show()));
+      QObject::connect(this, SIGNAL(buttonRecordingStopped()), stop, SLOT(hide()));
+
+      QHBoxLayout * layout = new QHBoxLayout;
+      layout->addWidget(record);
+      layout->addWidget(pause);
+      layout->addWidget(play);
+      layout->addWidget(stop);
+      layout->addWidget(snapshot);
+      m_toolbar->setLayout(layout);
+      m_toolbar->show();
+   }
+
    void timerEvent(QTimerEvent * ev) {
       if (ev->timerId() == m_fpsTimer.timerId()) handleFPSInterval();
    }
@@ -229,7 +405,7 @@ private:
    void handleFPSInterval() {
        static bool forceUpdate = false;
 
-       qDebug() << m_measuredFps << "- handleFPSInterval["<< m_cameraName << "], m_fps == " << m_fps;
+//       qDebug() << m_measuredFps << "- handleFPSInterval["<< m_cameraName << "], m_fps == " << m_fps;
 
        // If we have not been sent image display is frozen, so cause a refresh
        if (m_fps == 0) forceUpdate = true;
@@ -260,6 +436,7 @@ public:
 
 #define PROPKEY_CAMERAS_PROPERTY "cameras"
 #define PROPKEY_FULLSCREEN "full_screen"
+#define PROPKEY_RECORD_VIDEO_CAMERA_LIST_PROPERTY "recordVideoFromCamera"
 
 int main(int argc, char *argv[])
 {
@@ -279,6 +456,8 @@ int main(int argc, char *argv[])
    QString cameraList = QString::fromStdString(p.GetProperty(PROPKEY_CAMERAS_PROPERTY));
    QStringList camera_list = cameraList.split((","));
 
+   QString recordVideoRequest = QString::fromStdString(p.GetProperty(PROPKEY_RECORD_VIDEO_CAMERA_LIST_PROPERTY));
+   QStringList recordVideoRequestCameraList = recordVideoRequest.split((","));
 
    // Calculate the size of the grid required to display evenly
    int numStreams = camera_list.size();
@@ -321,10 +500,19 @@ int main(int argc, char *argv[])
        vStream->converterThread.start();
        vStream->capture.moveToThread(&vStream->captureThread);
        vStream->converter.moveToThread(&vStream->converterThread);
+
+       // Set up basic relationship between capture -> converter -> imageViewer.
        QObject::connect(&vStream->capture, &Capture::frameReady, &vStream->converter, &Converter::processFrame);
        QObject::connect(&vStream->capture, &Capture::cameraNamed, &vStream->view, &ImageViewer::setCameraName);
        QObject::connect(&vStream->converter, &Converter::imageReady, &vStream->view, &ImageViewer::setImage);
        QObject::connect(&vStream->capture, &Capture::started, [](){ qDebug() << "Capture started."; });
+
+       // Set up recording and snapshot relationship between capture -> imageViewer.
+       QObject::connect(&vStream->view, &ImageViewer::startRecording, &vStream->capture, &Capture::startRecording);
+       QObject::connect(&vStream->view, &ImageViewer::stopRecording, &vStream->capture, &Capture::stopRecording);
+       QObject::connect(&vStream->view, &ImageViewer::takeSnapshotImage, &vStream->capture, &Capture::snapshot);
+       QObject::connect(&vStream->capture, &Capture::recordingStarted, &vStream->view, &ImageViewer::recordingStarted);
+       QObject::connect(&vStream->capture, &Capture::recordingStopped, &vStream->view, &ImageViewer::recordingStopped);
 
        // Select the right argument for the capture stream.
        QString argCamUrl = QString::fromStdString(p.GetProperty(camera.toStdString())).trimmed();
@@ -334,6 +522,7 @@ int main(int argc, char *argv[])
        // And start capturing
        if (isInt) QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(int, intCamUrlArg),Q_ARG(QString, camera));
        else QMetaObject::invokeMethod(&vStream->capture, "start", Qt::QueuedConnection, Q_ARG(QString, argCamUrl),Q_ARG(QString, camera));
+
 
        // Keep a list of each video stream
        streamList.append(vStream);

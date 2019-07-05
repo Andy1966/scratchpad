@@ -42,3 +42,7 @@ HEADERS += \
 
 DISTFILES += \
     videoProperties.ini
+
+RESOURCES += \
+    icons.qrc
+

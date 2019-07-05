@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/toolbar">
+        <file>icons/pause.png</file>
+        <file>icons/record.png</file>
+        <file>icons/snapshot.png</file>
+        <file>icons/stop.png</file>
+        <file>icons/play.png</file>
+    </qresource>
+</RCC>
