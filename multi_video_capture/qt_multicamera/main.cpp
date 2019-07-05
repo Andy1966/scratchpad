@@ -20,6 +20,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QSize>
+#include <QList>
 
 #define MS_ONE_SECOND  1000
 #define VIDEO_FILE_FRAMES_PER_SECOND 30
@@ -27,6 +28,9 @@
 #define JPEG_FILE_EXTENSION "JPEG"
 #define MJPG_FILE_EXTENSION "MP4"
 #define CAPTURED_VIDEO_DIRECTORY_PATH "captured/videos"
+#define STANDARD_KB 1024
+#define DISK_SPACE_STOP_RECORDING_LIMIT ((qint64)STANDARD_KB*STANDARD_KB*STANDARD_KB*2)
+
 
 Q_DECLARE_METATYPE(cv::Mat)
 
@@ -133,6 +137,9 @@ public:
    }
 
    Q_SLOT void startRecording() {
+       // If we are recording video then nothing more to do
+       if (!m_pausedRecording && !m_videoWriter.isNull() && m_videoWriter->isOpened()) return;
+
        QString path(CAPTURED_VIDEO_DIRECTORY_PATH);
        QFile file;
        openFileForCapture(file, path, fileNameSuggestion() + "." + MJPG_FILE_EXTENSION);
@@ -146,7 +153,12 @@ public:
        emit recordingStarted();
    }
 
-   Q_SLOT void stopRecording() {m_videoWriter->release(); m_videoWriter.reset(); emit recordingStopped();}
+   Q_SLOT void stopRecording() {
+       // Simply check if we are actually recording.
+       if (m_videoWriter.isNull()) return;
+
+       m_videoWriter->release(); m_videoWriter.reset(); emit recordingStopped();
+   }
 
    Q_SLOT void pauseRecording() {m_pausedRecording = true;}
    Q_SLOT void continueRecording() {m_pausedRecording = false;}
@@ -170,7 +182,7 @@ private:
    }
 
    QString fileNameSuggestion() {
-       return QDateTime::currentDateTime().toString("ddMMyyyy_HHmmss");
+       return m_cameraName + " " + QDateTime::currentDateTime().toString("ddMMyyyy_HHmmss");
    }
    void timerEvent(QTimerEvent * ev) {
       if (ev->timerId() == m_captureTimer.timerId()) handle_capture();
@@ -333,13 +345,14 @@ public:
         emit buttonRecordingStopped();
    }
 
+   // Record all toolbar or internal button can start recording or stop.
+   Q_SLOT void recordPressed() { emit startRecording();}
+   Q_SLOT void stopPressed() { emit stopRecording();}
 private:
    // Button pressed slots we relay and use internally here...
-   Q_SLOT void recordPressed() { emit startRecording();}
    Q_SLOT void playPressed() { emit continueRecording();}
    Q_SLOT void pausePressed() { emit pauseRecording();}
    Q_SLOT void snapshotPressed() { emit takeSnapshotImage();}
-   Q_SLOT void stopPressed() { emit stopRecording();}
 
 
    void resizeEvent(QResizeEvent *event)
@@ -543,6 +556,66 @@ int main(int argc, char *argv[])
        int width = rec.width();
        viewingWindow.resize(width, height);
    }
+
+   QToolBar *toolbar = viewingWindow.addToolBar("Toolbar");
+     QAction * actionRecord = toolbar->addAction( QIcon(":/toolbar/icons/record.png"), "Record ALL videos");
+     QAction * actionStop = toolbar->addAction( QIcon(":/toolbar/icons/stop.png"), "Stop recording ALL videos");
+     toolbar->addSeparator();
+     QAction *actionQuit = toolbar->addAction(QIcon(":/toolbar/icons/exit.png"),"Quit Application");
+
+     QObject::connect( actionQuit, &QAction::triggered, &app, &QApplication::quit);
+     QList<ImageViewer *> viewerList = viewingWindow.findChildren<ImageViewer *>();
+     foreach (ImageViewer * view, viewerList)
+     {
+        QObject::connect( actionRecord, &QAction::triggered, view, &ImageViewer::recordPressed);
+        QObject::connect( actionStop, &QAction::triggered, view, &ImageViewer::stopPressed);
+     }
+
+     qDebug() << "-----------------------FYI----------------------------------";
+     QStorageInfo storage = QStorageInfo::root();
+     qDebug() << storage.rootPath();
+     if (storage.isReadOnly())
+         qDebug() << "isReadOnly:" << storage.isReadOnly();
+
+     qDebug() << "name:" << storage.name();
+     qDebug() << "fileSystemType:" << storage.fileSystemType();
+     qDebug() << "size:" << storage.bytesTotal()/1000/1000 << "MB";
+     qDebug() << "availableSize:" << storage.bytesAvailable()/1000/1000 << "MB";
+
+     // Use lambda timer to update the status bar with disk space available...
+     QStatusBar * statusBar = new QStatusBar();
+     viewingWindow.setStatusBar(statusBar);
+
+     QTimer* diskSpaceTimer = new QTimer;
+     diskSpaceTimer->setInterval(1000);
+     QObject::connect(diskSpaceTimer, &QTimer::timeout, [&storage, &viewingWindow, &diskSpaceTimer](){
+         static bool toggleVal = false;
+         storage.refresh();
+         qint64 bytesAvailable = storage.bytesAvailable();
+         viewingWindow.statusBar()->showMessage(QString((toggleVal) ? "/":"\\") +
+                                                QString("Storage space availability...") +
+                                                QString::number(bytesAvailable/STANDARD_KB/STANDARD_KB) + "MB/" +
+                                                QString::number(storage.bytesTotal()/STANDARD_KB/STANDARD_KB) + "MB");
+
+         // If we run out of space immediately stop
+        if (bytesAvailable < DISK_SPACE_STOP_RECORDING_LIMIT)
+        {
+            QList<ImageViewer *> viewerList = viewingWindow.findChildren<ImageViewer *>();
+            foreach (ImageViewer * view, viewerList)
+            {
+               view->stopPressed();
+            }
+            diskSpaceTimer->stop();
+            diskSpaceTimer->deleteLater();
+            viewingWindow.statusBar()->showMessage("Disk space ran out, stopped all recording.Exit, fix and restart!");
+        }
+
+
+         toggleVal = !toggleVal;
+     });
+     diskSpaceTimer->start(1000);
+
+     qDebug() << "------------------------------------------------------------";
 
    return app.exec();
 }

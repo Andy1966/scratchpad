@@ -18,7 +18,7 @@ LIBS += -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_videoio
 
 windows{
 
-INCLUDEPATH += C:\development\opencv\build\include
+INCLUDEPATH += C:\development\opencv\build\install\include
 
 LIBS += -L C:/development/opencv/build/bin/ \
         -lopencv_core410 \
